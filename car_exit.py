@@ -12,10 +12,10 @@ import platform
 
 # ====== Fix Tesseract Path for Windows ======
 if platform.system() == "Windows":
-    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Make sure this path exists
+   pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Make sure this path exists
 
 # ===== Load YOLOv8 Model =====
-model = YOLO('runs/detect/train4/weights/best.pt')  # Use raw path format for Windows
+model = YOLO('best.pt')  # Use raw path format for Windows
 
 # ===== CSV Log File =====
 csv_file = 'plates_log.csv'
