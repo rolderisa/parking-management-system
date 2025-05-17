@@ -1,3 +1,4 @@
+# flake8: noqa
 import cv2
 from ultralytics import YOLO
 import pytesseract
@@ -8,26 +9,18 @@ import serial.tools.list_ports
 import csv
 from collections import Counter
 import random
-import platform
-
-# ====== Fix Tesseract Path for Windows ======
-if platform.system() == "Windows":
-   pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Make sure this path exists
-
-# ===== Load YOLOv8 Model =====
-model = YOLO('best.pt')  # Use raw path format for Windows
-
-# ===== CSV Log File =====
+# Load YOLOv8 model (same model as entry)
+model = YOLO('best.pt')
+# CSV log file
 csv_file = 'plates_log.csv'
-
-# ===== Auto-detect Arduino Serial Port (Windows style) =====
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# ===== Auto-detect Arduino Serial Port =====
 def detect_arduino_port():
     ports = list(serial.tools.list_ports.comports())
     for port in ports:
-        if "COM" in port.device:  # Windows ports usually show as COMx
+        if "COM" in port.device or "ttyUSB" in port.device or "ttyACM" in port.device:
             return port.device
     return None
-
 arduino_port = detect_arduino_port()
 if arduino_port:
     print(f"[CONNECTED] Arduino on {arduino_port}")
@@ -36,11 +29,19 @@ if arduino_port:
 else:
     print("[ERROR] Arduino not detected.")
     arduino = None
-
-# ===== Mock Ultrasonic Sensor =====
-def mock_ultrasonic_distance():
-    return random.choice([random.randint(10, 40)] + [random.randint(60, 150)] * 10)
-
+    # reading distance from ulrasonic sensor
+def read_distance(arduino):
+    """
+    Reads a distance (float) value from the Arduino via serial.
+    Returns the float if valid, or None if invalid/empty.
+    """
+    if arduino and arduino.in_waiting > 0:
+        try:
+            line = arduino.readline().decode('utf-8').strip()
+            return float(line)
+        except ValueError:
+            return None
+    return None
 # ===== Check payment status in CSV =====
 def is_payment_complete(plate_number):
     if not os.path.exists(csv_file):
@@ -51,40 +52,30 @@ def is_payment_complete(plate_number):
             if row['Plate Number'] == plate_number and row['Payment Status'] == '1':
                 return True
     return False
-
-# ===== Webcam Feed =====
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)  # Use DirectShow backend for Windows stability
+# ===== Webcam and Main Loop =====
+cap = cv2.VideoCapture(0)
 plate_buffer = []
-
 print("[EXIT SYSTEM] Ready. Press 'q' to quit.")
-
 while True:
     ret, frame = cap.read()
     if not ret:
         break
-
-    distance = mock_ultrasonic_distance()
+    distance = read_distance(arduino)
     print(f"[SENSOR] Distance: {distance} cm")
-
-    if distance <= 50:
+    if distance is not None and distance <= 50:
         results = model(frame)
-
         for result in results:
             for box in result.boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 plate_img = frame[y1:y2, x1:x2]
-
                 # Preprocessing
                 gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
                 blur = cv2.GaussianBlur(gray, (5, 5), 0)
                 thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-
                 # OCR
                 plate_text = pytesseract.image_to_string(
-                    thresh,
-                    config='--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+                    thresh, config='--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
                 ).strip().replace(" ", "")
-
                 if "RA" in plate_text:
                     start_idx = plate_text.find("RA")
                     plate_candidate = plate_text[start_idx:]
@@ -95,11 +86,9 @@ while True:
                             digits.isdigit() and suffix.isalpha() and suffix.isupper()):
                             print(f"[VALID] Plate Detected: {plate_candidate}")
                             plate_buffer.append(plate_candidate)
-
                             if len(plate_buffer) >= 3:
                                 most_common = Counter(plate_buffer).most_common(1)[0][0]
                                 plate_buffer.clear()
-
                                 if is_payment_complete(most_common):
                                     print(f"[ACCESS GRANTED] Payment complete for {most_common}")
                                     if arduino:
@@ -111,19 +100,15 @@ while True:
                                 else:
                                     print(f"[ACCESS DENIED] Payment NOT complete for {most_common}")
                                     if arduino:
-                                        arduino.write(b'2')  # Trigger buzzer
+                                        arduino.write(b'2')  # Trigger warning buzzer
                                         print("[ALERT] Buzzer triggered (sent '2')")
-
                 cv2.imshow("Plate", plate_img)
                 cv2.imshow("Processed", thresh)
                 time.sleep(0.5)
-
-    annotated_frame = results[0].plot() if distance <= 50 else frame
+    annotated_frame = results[0].plot() if distance is not None and distance <= 50 else frame
     cv2.imshow("Exit Webcam Feed", annotated_frame)
-
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
-
 cap.release()
 if arduino:
     arduino.close()
